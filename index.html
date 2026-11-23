@@ -176,7 +176,8 @@
   <!-- 通訊紀錄區 -->
   <div class="card">
     <div style="font-weight: 600; font-size: 13px; margin-bottom: 6px; color: #666;">通訊紀錄</div>
-    <div id="log">正在檢查已記憶的 BT05 裝置 (限時 3 秒)...\n</div>
+    <div id="log">正在檢查已記憶的 BT05 裝置 (限時 3 秒)...
+</div>
   </div>
 
   <script>
@@ -189,7 +190,8 @@
 
     function appendLog(text) {
       const logEl = document.getElementById('log');
-      logEl.textContent += text + '\n';
+      logEl.textContent += text + '
+';
       logEl.scrollTop = logEl.scrollHeight;
     }
 
@@ -233,7 +235,6 @@
       }
     }
 
-    // 超時控制工具：超過指定毫秒即中斷等待並拋出超時錯誤
     function withTimeout(promise, ms) {
       let timer;
       const timeoutPromise = new Promise((_, reject) => {
@@ -242,7 +243,6 @@
       return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timer));
     }
 
-    // 核心 GATT 連線與監聽函式
     async function establishGattConnection(device) {
       bluetoothDevice = device;
       bluetoothDevice.addEventListener('gattserverdisconnected', () => {
@@ -259,8 +259,10 @@
       bleCharacteristic.addEventListener('characteristicvaluechanged', (event) => {
         const chunk = new TextDecoder('utf-8').decode(event.target.value);
         rxBuffer += chunk;
-        if (rxBuffer.includes('\n')) {
-          const lines = rxBuffer.split('\n');
+        if (rxBuffer.includes('
+')) {
+          const lines = rxBuffer.split('
+');
           rxBuffer = lines.pop();
           lines.forEach(line => {
             const msg = line.trim();
@@ -278,7 +280,6 @@
       appendLog('✅ BT05 連線成功！');
     }
 
-    // 網頁開啟時自動檢查 3 秒：若沒裝置或超時，立刻轉為手動搜尋
     async function tryAutoConnect() {
       if (!navigator.bluetooth || !navigator.bluetooth.getDevices) {
         appendLog('此瀏覽器不支援背景記憶，請點擊「連線 BT05」手動搜尋。');
@@ -299,10 +300,9 @@
 
           appendLog('發現已記憶裝置：' + savedBT05.name + '，嘗試自動連線...');
           await establishGattConnection(savedBT05);
-        })(), 3000); // 設定嚴格 3 秒（3000 毫秒）上限
+        })(), 3000);
 
       } catch (err) {
-        // 3 秒內未連上或找不到已記憶裝置：中止背景嘗試並切回手動搜尋
         if (bluetoothDevice && bluetoothDevice.gatt.connected) {
           bluetoothDevice.gatt.disconnect();
         }
@@ -320,7 +320,6 @@
       }
     }
 
-    // 手動點擊連線：直接開啟系統藍牙掃描視窗搜尋 BT05
     async function manualConnect() {
       try {
         appendLog('正在手動搜尋 BT05 裝置...');
@@ -334,40 +333,47 @@
 
         appendLog('連線中：' + (device.name || 'BT05') + '...');
         await establishGattConnection(device);
-        } catch (err) {
-updateUI('disconnected');
-appendLog('❌ 手動連線取消或失敗: ' + err.message);
-}
-}
-function disconnectBluetooth() {
-if (bluetoothDevice && bluetoothDevice.gatt.connected) {
-appendLog('正在手動斷開藍牙...');
-bluetoothDevice.gatt.disconnect();
-} else {
-bleCharacteristic = null;
-updateUI('disconnected');
-appendLog('目前無連線中的裝置');
-}
-}
-async function sendCmd(cmd) {
-if (!bleCharacteristic) {
-alert('請先點擊「連線 BT05」完成連線！');
-return;
-}
-const buttons = document.querySelectorAll('.ctrl-btn');
-buttons.forEach(b => b.disabled = true);
-setTimeout(() => buttons.forEach(b => b.disabled = false), 500);
-const data = new TextEncoder('utf-8').encode(cmd);
-try {
-if (bleCharacteristic.properties.writeWithoutResponse) {
-await bleCharacteristic.writeValueWithoutResponse(data);
-} else {
-await bleCharacteristic.writeValue(data);
-}
-appendLog('➡️ 傳送指令: ' + cmd);
-} catch (err) {
-appendLog('❌ 傳送失敗: ' + err.message);
-}
-}
-// 頁面載入後自動執行 3 秒快速檢測
-window.addEventListener('load', tryAutoConnect);
+      } catch (err) {
+        updateUI('disconnected');
+        appendLog('❌ 手動連線取消或失敗: ' + err.message);
+      }
+    }
+
+    function disconnectBluetooth() {
+      if (bluetoothDevice && bluetoothDevice.gatt.connected) {
+        appendLog('正在手動斷開藍牙...');
+        bluetoothDevice.gatt.disconnect();
+      } else {
+        bleCharacteristic = null;
+        updateUI('disconnected');
+        appendLog('目前無連線中的裝置');
+      }
+    }
+
+    async function sendCmd(cmd) {
+      if (!bleCharacteristic) {
+        alert('請先點擊「連線 BT05」完成連線！');
+        return;
+      }
+
+      const buttons = document.querySelectorAll('.ctrl-btn');
+      buttons.forEach(b => b.disabled = true);
+      setTimeout(() => buttons.forEach(b => b.disabled = false), 500);
+
+      const data = new TextEncoder('utf-8').encode(cmd);
+      try {
+        if (bleCharacteristic.properties.writeWithoutResponse) {
+          await bleCharacteristic.writeValueWithoutResponse(data);
+        } else {
+          await bleCharacteristic.writeValue(data);
+        }
+        appendLog('➡️ 傳送指令: ' + cmd);
+      } catch (err) {
+        appendLog('❌ 傳送失敗: ' + err.message);
+      }
+    }
+
+    window.addEventListener('load', tryAutoConnect);
+  </script>
+</body>
+</html>
