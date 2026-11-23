@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>鐵捲門藍牙遙控器</title>
+  <style>
+    :root {
+      --ios-bg: #F2F2F7;
+      --ios-card: #FFFFFF;
+      --ios-blue: #007AFF;
+      --ios-green: #34C759;
+      --ios-red: #FF3B30;
+      --ios-gray: #8E8E93;
+      --ios-text: #1C1C1E;
+    }
+    * { box-sizing: border-box; user-select: none; -webkit-user-select: none; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background-color: var(--ios-bg);
+      color: var(--ios-text);
+      margin: 0;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      min-height: 100vh;
+    }
+    .card {
+      background: var(--ios-card);
+      border-radius: 16px;
+      padding: 16px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+    }
+    .status-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+    .badge {
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-size: 13px;
+      font-weight: 600;
+      background: #E5E5EA;
+      color: var(--ios-gray);
+    }
+    .badge.connected { background: #D1F2D9; color: #1E8E3E; }
+    
+    .btn-connect {
+      width: 100%;
+      padding: 13px;
+      border: none;
+      border-radius: 12px;
+      font-size: 16px;
+      font-weight: 600;
+      color: white;
+      background: var(--ios-blue);
+      cursor: pointer;
+    }
+    .btn-connect.disconnect { background: var(--ios-gray); }
+
+    /* Arduino 回傳動作確認提示條 */
+    .feedback-banner {
+      text-align: center;
+      padding: 12px;
+      border-radius: 12px;
+      font-weight: 700;
+      font-size: 16px;
+      background: #E5E5EA;
+      color: #666;
+      transition: all 0.2s;
+    }
+    .feedback-banner.active {
+      background: #D1F2D9;
+      color: #1E8E3E;
+    }
+
+    /* 上、停、下 遙控主面板 */
+    .control-panel {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      padding: 6px 0;
+    }
+    .ctrl-btn {
+      width: 100%;
+      height: 90px;
+      border: none;
+      border-radius: 18px;
+      font-size: 28px;
+      font-weight: 700;
+      letter-spacing: 3px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+      transition: transform 0.1s, opacity 0.1s;
+    }
+    .ctrl-btn:active {
+      transform: scale(0.97);
+      opacity: 0.85;
+    }
+    .ctrl-btn:disabled {
+      opacity: 0.5;
+      pointer-events: none;
+    }
+    .btn-up { background: var(--ios-blue); color: white; }
+    .btn-stop { background: var(--ios-red); color: white; }
+    .btn-down { background: var(--ios-blue); color: white; }
+
+    #log {
+      height: 100px;
+      overflow-y: auto;
+      background: #1C1C1E;
+      color: #32D74B;
+      font-family: monospace;
+      font-size: 12px;
+      padding: 10px;
+      border-radius: 10px;
+      white-space: pre-wrap;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- 連線狀態區 -->
+  <div class="card">
+    <div class="status-row">
+      <span style="font-weight: 700; font-size: 18px;">鐵捲門藍牙控制</span>
+      <span id="statusBadge" class="badge">未連線</span>
+    </div>
+    <button id="connectBtn" class="btn-connect" onclick="toggleConnection()">搜尋並連線 (AT-09 / BT05)</button>
+  </div>
+
+  <!-- 動作執行回饋狀態 -->
+  <div id="feedbackBanner" class="feedback-banner">等待藍牙連線</div>
+
+  <!-- 上、停、下 控制按鈕區 -->
+  <div class="card">
+    <div class="control-panel">
+      <button class="ctrl-btn btn-up" onclick="sendCmd('U')">▲ 上</button>
+      <button class="ctrl-btn btn-stop" onclick="sendCmd('S')">■ 停</button>
+      <button class="ctrl-btn btn-down" onclick="sendCmd('D')">▼ 下</button>
+    </div>
+  </div>
+
+  <!-- 通訊紀錄區 -->
+  <div class="card">
+    <div style="font-weight: 600; font-size: 13px; margin-bottom: 6px; color: #666;">通訊紀錄</div>
+    <div id="log">請先點擊上方按鈕連線藍牙...\n</div>
+  </div>
+
+  <script>
+    const SERVICE_UUID = '0000ffe0-0000-1000-8000-00805f9b34fb';
+    const CHARACTERISTIC_UUID = '0000ffe1-0000-1000-8000-00805f9b34fb';
+
+    let bluetoothDevice;
+    let bleCharacteristic;
+    let rxBuffer = '';
+
+    function appendLog(text) {
+      const logEl = document.getElementById('log');
+      logEl.textContent += text + '\n';
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function setBanner(text, isSuccess = false) {
+      const banner = document.getElementById('feedbackBanner');
+      banner.textContent = text;
+      if (isSuccess) {
+        banner.classList.add('active');
+      } else {
+        banner.classList.remove('active');
+      }
+    }
+
+    function updateUI(connected, name = '') {
+      const badge = document.getElementById('statusBadge');
+      const btn = document.getElementById('connectBtn');
+      if (connected) {
+        badge.textContent = '已連線：' + name;
+        badge.classList.add('connected');
+        btn.textContent = '中斷連線';
+        btn.classList.add('disconnect');
+        setBanner('已連線，請點擊下方按鈕操作', false);
+      } else {
+        badge.textContent = '未連線';
+        badge.classList.remove('connected');
+        btn.textContent = '搜尋並連線 (AT-09 / BT05)';
+        btn.classList.remove('disconnect');
+        setBanner('藍牙未連線', false);
+      }
+    }
+
+    async function toggleConnection() {
+      if (bluetoothDevice && bluetoothDevice.gatt.connected) {
+        bluetoothDevice.gatt.disconnect();
+        return;
+      }
+
+      try {
+        appendLog('正在搜尋藍牙裝置...');
+        bluetoothDevice = await navigator.bluetooth.requestDevice({
+          acceptAllDevices: true,
+          optionalServices: [SERVICE_UUID]
+        });
+
+        bluetoothDevice.addEventListener('gattserverdisconnected', () => {
+          appendLog('⚠️ 藍牙已中斷連線');
+          updateUI(false);
+        });
+
+        appendLog('連線中：' + (bluetoothDevice.name || '未知裝置'));
+        const server = await bluetoothDevice.gatt.connect();
+        const service = await server.getPrimaryService(SERVICE_UUID);
+        bleCharacteristic = await service.getCharacteristic(CHARACTERISTIC_UUID);
+
+        // 監聽 Arduino 的 bleSerial.println("OK:...") 回傳
+        await bleCharacteristic.startNotifications();
+        bleCharacteristic.addEventListener('characteristicvaluechanged', (event) => {
+          const chunk = new TextDecoder('utf-8').decode(event.target.value);
+          rxBuffer += chunk;
+          if (rxBuffer.includes('\n')) {
+            const lines = rxBuffer.split('\n');
+            rxBuffer = lines.pop();
+            lines.forEach(line => {
+              const msg = line.trim();
+              if (msg) {
+                appendLog('⬅️ 控制器回傳: ' + msg);
+                if (msg === 'OK:UP') setBanner('✅ 鐵捲門已執行：【▲ 上】', true);
+                if (msg === 'OK:STOP') setBanner('✅ 鐵捲門已執行：【■ 停】', true);
+                if (msg === 'OK:DOWN') setBanner('✅ 鐵捲門已執行：【▼ 下】', true);
+              }
+            });
+          }
+        });
+
+        updateUI(true, bluetoothDevice.name || 'AT-09');
+        appendLog('✅ 藍牙連線成功！');
+      } catch (err) {
+        appendLog('❌ 連線失敗: ' + err.message);
+      }
+    }
+
+    async function sendCmd(cmd) {
+      if (!bleCharacteristic) {
+        alert('請先連線鐵捲門藍牙！');
+        return;
+      }
+
+      // 防連點：暫時停用按鈕 0.5 秒（配合 Arduino 350ms 點動時間）
+      const buttons = document.querySelectorAll('.ctrl-btn');
+      buttons.forEach(b => b.disabled = true);
+      setTimeout(() => buttons.forEach(b => b.disabled = false), 500);
+
+      const data = new TextEncoder('utf-8').encode(cmd);
+      try {
+        if (bleCharacteristic.properties.writeWithoutResponse) {
+          await bleCharacteristic.writeValueWithoutResponse(data);
+        } else {
+          await bleCharacteristic.writeValue(data);
+        }
+        appendLog('➡️ 傳送指令: ' + cmd);
+      } catch (err) {
+        appendLog('❌ 傳送失敗: ' + err.message);
+      }
+    }
+  </script>
+</body>
+</html>
