@@ -187,11 +187,11 @@
     let bluetoothDevice = null;
     let bleCharacteristic = null;
     let rxBuffer = '';
+    let autoAttemptId = 0;
 
     function appendLog(text) {
       const logEl = document.getElementById('log');
-      logEl.textContent += text + '
-';
+      logEl.textContent += text + '\n';
       logEl.scrollTop = logEl.scrollHeight;
     }
 
@@ -243,26 +243,41 @@
       return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timer));
     }
 
-    async function establishGattConnection(device) {
+    function handleDisconnected() {
+      bleCharacteristic = null;
+      appendLog('⚠️ BT05 已中斷連線');
+      updateUI('disconnected');
+    }
+
+    async function establishGattConnection(device, attemptId = null) {
       bluetoothDevice = device;
-      bluetoothDevice.addEventListener('gattserverdisconnected', () => {
-        bleCharacteristic = null;
-        appendLog('⚠️ BT05 已中斷連線');
-        updateUI('disconnected');
-      });
+      bluetoothDevice.removeEventListener('gattserverdisconnected', handleDisconnected);
+      bluetoothDevice.addEventListener('gattserverdisconnected', handleDisconnected);
 
       const server = await bluetoothDevice.gatt.connect();
+      if (attemptId !== null && attemptId !== autoAttemptId) {
+        if (server && server.connected) server.disconnect();
+        throw new Error('ABORTED');
+      }
+
       const service = await server.getPrimaryService(SERVICE_UUID);
+      if (attemptId !== null && attemptId !== autoAttemptId) {
+        if (server && server.connected) server.disconnect();
+        throw new Error('ABORTED');
+      }
+
       bleCharacteristic = await service.getCharacteristic(CHARACTERISTIC_UUID);
+      if (attemptId !== null && attemptId !== autoAttemptId) {
+        if (server && server.connected) server.disconnect();
+        throw new Error('ABORTED');
+      }
 
       await bleCharacteristic.startNotifications();
       bleCharacteristic.addEventListener('characteristicvaluechanged', (event) => {
         const chunk = new TextDecoder('utf-8').decode(event.target.value);
         rxBuffer += chunk;
-        if (rxBuffer.includes('
-')) {
-          const lines = rxBuffer.split('
-');
+        if (rxBuffer.includes('\n')) {
+          const lines = rxBuffer.split('\n');
           rxBuffer = lines.pop();
           lines.forEach(line => {
             const msg = line.trim();
@@ -287,31 +302,38 @@
         return;
       }
 
+      const currentAttempt = ++autoAttemptId;
       updateUI('connecting');
+      let targetDevice = null;
 
       try {
         await withTimeout((async () => {
           const devices = await navigator.bluetooth.getDevices();
+          if (currentAttempt !== autoAttemptId) throw new Error('ABORTED');
+
           const savedBT05 = devices.find(d => d.name && (d.name.startsWith('BT05') || d.name.startsWith('MLT-BT05')));
-          
           if (!savedBT05) {
             throw new Error('NO_SAVED_DEVICE');
           }
 
+          targetDevice = savedBT05;
           appendLog('發現已記憶裝置：' + savedBT05.name + '，嘗試自動連線...');
-          await establishGattConnection(savedBT05);
+          await establishGattConnection(savedBT05, currentAttempt);
         })(), 3000);
 
       } catch (err) {
-        if (bluetoothDevice && bluetoothDevice.gatt.connected) {
-          bluetoothDevice.gatt.disconnect();
-        }
+        autoAttemptId++;
+        try {
+          if (targetDevice && targetDevice.gatt) targetDevice.gatt.disconnect();
+          if (bluetoothDevice && bluetoothDevice.gatt) bluetoothDevice.gatt.disconnect();
+        } catch (e) {}
+
         bluetoothDevice = null;
         bleCharacteristic = null;
         updateUI('disconnected');
 
         if (err.message === 'TIMEOUT') {
-          appendLog('⏱️ 超過 3 秒未偵測到裝置，已切換為手動搜尋模式。');
+          appendLog('⏱️ 超過 3 秒未偵測到裝置，已強制結束自動連線，請點擊「連線 BT05」手動搜尋。');
         } else if (err.message === 'NO_SAVED_DEVICE') {
           appendLog('ℹ️ 尚無已記憶裝置，請點擊「連線 BT05」手動搜尋。');
         } else {
@@ -321,6 +343,15 @@
     }
 
     async function manualConnect() {
+      autoAttemptId++;
+      try {
+        if (bluetoothDevice && bluetoothDevice.gatt) {
+          bluetoothDevice.gatt.disconnect();
+        }
+      } catch (e) {}
+      bluetoothDevice = null;
+      bleCharacteristic = null;
+
       try {
         appendLog('正在手動搜尋 BT05 裝置...');
         const device = await navigator.bluetooth.requestDevice({
@@ -332,7 +363,7 @@
         });
 
         appendLog('連線中：' + (device.name || 'BT05') + '...');
-        await establishGattConnection(device);
+        await establishGattConnection(device, null);
       } catch (err) {
         updateUI('disconnected');
         appendLog('❌ 手動連線取消或失敗: ' + err.message);
@@ -340,14 +371,17 @@
     }
 
     function disconnectBluetooth() {
-      if (bluetoothDevice && bluetoothDevice.gatt.connected) {
-        appendLog('正在手動斷開藍牙...');
-        bluetoothDevice.gatt.disconnect();
-      } else {
-        bleCharacteristic = null;
-        updateUI('disconnected');
-        appendLog('目前無連線中的裝置');
-      }
+      autoAttemptId++;
+      try {
+        if (bluetoothDevice && bluetoothDevice.gatt) {
+          appendLog('正在手動斷開藍牙...');
+          bluetoothDevice.gatt.disconnect();
+        }
+      } catch (e) {}
+      bluetoothDevice = null;
+      bleCharacteristic = null;
+      updateUI('disconnected');
+      appendLog('已斷開藍牙連線');
     }
 
     async function sendCmd(cmd) {
