@@ -48,7 +48,6 @@
     }
     .badge.connected { background: #D1F2D9; color: #1E8E3E; }
     
-    /* 連線與斷線雙按鈕並排設計 */
     .conn-btn-group {
       display: flex;
       gap: 10px;
@@ -85,7 +84,6 @@
       cursor: not-allowed;
     }
 
-    /* Arduino 回傳動作確認提示條 */
     .feedback-banner {
       text-align: center;
       padding: 12px;
@@ -101,7 +99,6 @@
       color: #1E8E3E;
     }
 
-    /* 上、停、下 遙控主面板 */
     .control-panel {
       display: flex;
       flex-direction: column;
@@ -158,7 +155,7 @@
       <span id="statusBadge" class="badge">未連線</span>
     </div>
     <div class="conn-btn-group">
-      <button id="connectBtn" class="btn-connect" onclick="connectBluetooth()">搜尋並連線</button>
+      <button id="connectBtn" class="btn-connect" onclick="manualConnect()">連線 BT05</button>
       <button id="disconnectBtn" class="btn-disconnect" onclick="disconnectBluetooth()" disabled>斷開藍牙</button>
     </div>
   </div>
@@ -178,7 +175,7 @@
   <!-- 通訊紀錄區 -->
   <div class="card">
     <div style="font-weight: 600; font-size: 13px; margin-bottom: 6px; color: #666;">通訊紀錄</div>
-    <div id="log">請先點擊上方按鈕連線藍牙...\n</div>
+    <div id="log">正在檢查已記憶的 BT05 裝置...\n</div>
   </div>
 
   <script>
@@ -220,54 +217,91 @@
       } else {
         badge.textContent = '未連線';
         badge.classList.remove('connected');
-        connectBtn.textContent = '搜尋並連線';
+        connectBtn.textContent = '連線 BT05';
         connectBtn.disabled = false;
         disconnectBtn.disabled = true;
         setBanner('藍牙未連線', false);
       }
     }
 
-    async function connectBluetooth() {
+    // 核心 GATT 連線與監聽函式（自動與手動共用）
+    async function establishGattConnection(device) {
+      bluetoothDevice = device;
+      bluetoothDevice.addEventListener('gattserverdisconnected', () => {
+        bleCharacteristic = null;
+        appendLog('⚠️ BT05 已中斷連線');
+        updateUI(false);
+      });
+
+      appendLog('正在建立 GATT 連線至 ' + (bluetoothDevice.name || 'BT05') + '...');
+      const server = await bluetoothDevice.gatt.connect();
+      const service = await server.getPrimaryService(SERVICE_UUID);
+      bleCharacteristic = await service.getCharacteristic(CHARACTERISTIC_UUID);
+
+      await bleCharacteristic.startNotifications();
+      bleCharacteristic.addEventListener('characteristicvaluechanged', (event) => {
+        const chunk = new TextDecoder('utf-8').decode(event.target.value);
+        rxBuffer += chunk;
+        if (rxBuffer.includes('\n')) {
+          const lines = rxBuffer.split('\n');
+          rxBuffer = lines.pop();
+          lines.forEach(line => {
+            const msg = line.trim();
+            if (msg) {
+              appendLog('⬅️ 控制器回傳: ' + msg);
+              if (msg === 'OK:UP') setBanner('✅ 鐵捲門已執行：【▲ 上】', true);
+              if (msg === 'OK:STOP') setBanner('✅ 鐵捲門已執行：【■ 停】', true);
+              if (msg === 'OK:DOWN') setBanner('✅ 鐵捲門已執行：【▼ 下】', true);
+            }
+          });
+        }
+      });
+
+      updateUI(true, bluetoothDevice.name || 'BT05');
+      appendLog('✅ BT05 連線成功！');
+    }
+
+    // 網頁開啟時自動嘗試連接曾經授權過的 BT05（免彈窗）
+    async function tryAutoConnect() {
+      if (!navigator.bluetooth || !navigator.bluetooth.getDevices) {
+        appendLog('此瀏覽器不支援背景自動重連，請點擊「連線 BT05」。');
+        return;
+      }
+
       try {
-        appendLog('正在搜尋藍牙裝置...');
-        bluetoothDevice = await navigator.bluetooth.requestDevice({
-          acceptAllDevices: true,
+        const devices = await navigator.bluetooth.getDevices();
+        const savedBT05 = devices.find(d => d.name && (d.name.startsWith('BT05') || d.name.startsWith('MLT-BT05')));
+        
+        if (savedBT05) {
+          appendLog('發現已記憶裝置：' + savedBT05.name + '，嘗試自動秒連...');
+          await establishGattConnection(savedBT05);
+        } else {
+          appendLog('首次使用或尚未記憶裝置，請點擊「連線 BT05」配對一次。');
+        }
+      } catch (err) {
+        appendLog('自動連線待命（請點擊「連線 BT05」）：' + err.message);
+      }
+    }
+
+    // 手動點擊連線（若記憶體已有裝置則直接重連，無需再跳清單）
+    async function manualConnect() {
+      try {
+        if (bluetoothDevice) {
+          appendLog('正在快速重連 ' + (bluetoothDevice.name || 'BT05') + '...');
+          await establishGattConnection(bluetoothDevice);
+          return;
+        }
+
+        appendLog('正在搜尋 BT05 裝置...');
+        const device = await navigator.bluetooth.requestDevice({
+          filters: [
+            { namePrefix: 'BT05' },
+            { namePrefix: 'MLT-BT05' }
+          ],
           optionalServices: [SERVICE_UUID]
         });
 
-        bluetoothDevice.addEventListener('gattserverdisconnected', () => {
-          bleCharacteristic = null;
-          appendLog('⚠️ 藍牙已中斷連線');
-          updateUI(false);
-        });
-
-        appendLog('連線中：' + (bluetoothDevice.name || '未知裝置'));
-        const server = await bluetoothDevice.gatt.connect();
-        const service = await server.getPrimaryService(SERVICE_UUID);
-        bleCharacteristic = await service.getCharacteristic(CHARACTERISTIC_UUID);
-
-        // 監聽 Arduino 的 bleSerial.println("OK:...") 回傳
-        await bleCharacteristic.startNotifications();
-        bleCharacteristic.addEventListener('characteristicvaluechanged', (event) => {
-          const chunk = new TextDecoder('utf-8').decode(event.target.value);
-          rxBuffer += chunk;
-          if (rxBuffer.includes('\n')) {
-            const lines = rxBuffer.split('\n');
-            rxBuffer = lines.pop();
-            lines.forEach(line => {
-              const msg = line.trim();
-              if (msg) {
-                appendLog('⬅️ 控制器回傳: ' + msg);
-                if (msg === 'OK:UP') setBanner('✅ 鐵捲門已執行：【▲ 上】', true);
-                if (msg === 'OK:STOP') setBanner('✅ 鐵捲門已執行：【■ 停】', true);
-                if (msg === 'OK:DOWN') setBanner('✅ 鐵捲門已執行：【▼ 下】', true);
-              }
-            });
-          }
-        });
-
-        updateUI(true, bluetoothDevice.name || 'AT-09');
-        appendLog('✅ 藍牙連線成功！');
+        await establishGattConnection(device);
       } catch (err) {
         appendLog('❌ 連線失敗: ' + err.message);
       }
@@ -286,11 +320,10 @@
 
     async function sendCmd(cmd) {
       if (!bleCharacteristic) {
-        alert('請先連線鐵捲門藍牙！');
+        alert('請先等待自動連線或點擊「連線 BT05」！');
         return;
       }
 
-      // 防連點：暫時停用按鈕 0.5 秒（配合 Arduino 350ms 點動時間）
       const buttons = document.querySelectorAll('.ctrl-btn');
       buttons.forEach(b => b.disabled = true);
       setTimeout(() => buttons.forEach(b => b.disabled = false), 500);
@@ -307,6 +340,5 @@
         appendLog('❌ 傳送失敗: ' + err.message);
       }
     }
-  </script>
-</body>
-</html>
+
+    // 頁面載入完成後立即觸發自動連線
