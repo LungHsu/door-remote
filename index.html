@@ -48,8 +48,13 @@
     }
     .badge.connected { background: #D1F2D9; color: #1E8E3E; }
     
+    /* 連線與斷線雙按鈕並排設計 */
+    .conn-btn-group {
+      display: flex;
+      gap: 10px;
+    }
     .btn-connect {
-      width: 100%;
+      flex: 2;
       padding: 13px;
       border: none;
       border-radius: 12px;
@@ -59,7 +64,26 @@
       background: var(--ios-blue);
       cursor: pointer;
     }
-    .btn-connect.disconnect { background: var(--ios-gray); }
+    .btn-connect:disabled {
+      background: #A0C8FF;
+      cursor: not-allowed;
+    }
+    .btn-disconnect {
+      flex: 1;
+      padding: 13px;
+      border: none;
+      border-radius: 12px;
+      font-size: 16px;
+      font-weight: 600;
+      color: white;
+      background: var(--ios-red);
+      cursor: pointer;
+    }
+    .btn-disconnect:disabled {
+      background: #E5E5EA;
+      color: var(--ios-gray);
+      cursor: not-allowed;
+    }
 
     /* Arduino 回傳動作確認提示條 */
     .feedback-banner {
@@ -133,7 +157,10 @@
       <span style="font-weight: 700; font-size: 18px;">鐵捲門藍牙控制</span>
       <span id="statusBadge" class="badge">未連線</span>
     </div>
-    <button id="connectBtn" class="btn-connect" onclick="toggleConnection()">搜尋並連線 (AT-09 / BT05)</button>
+    <div class="conn-btn-group">
+      <button id="connectBtn" class="btn-connect" onclick="connectBluetooth()">搜尋並連線</button>
+      <button id="disconnectBtn" class="btn-disconnect" onclick="disconnectBluetooth()" disabled>斷開藍牙</button>
+    </div>
   </div>
 
   <!-- 動作執行回饋狀態 -->
@@ -158,8 +185,8 @@
     const SERVICE_UUID = '0000ffe0-0000-1000-8000-00805f9b34fb';
     const CHARACTERISTIC_UUID = '0000ffe1-0000-1000-8000-00805f9b34fb';
 
-    let bluetoothDevice;
-    let bleCharacteristic;
+    let bluetoothDevice = null;
+    let bleCharacteristic = null;
     let rxBuffer = '';
 
     function appendLog(text) {
@@ -180,28 +207,27 @@
 
     function updateUI(connected, name = '') {
       const badge = document.getElementById('statusBadge');
-      const btn = document.getElementById('connectBtn');
+      const connectBtn = document.getElementById('connectBtn');
+      const disconnectBtn = document.getElementById('disconnectBtn');
+
       if (connected) {
         badge.textContent = '已連線：' + name;
         badge.classList.add('connected');
-        btn.textContent = '中斷連線';
-        btn.classList.add('disconnect');
+        connectBtn.textContent = '已連線';
+        connectBtn.disabled = true;
+        disconnectBtn.disabled = false;
         setBanner('已連線，請點擊下方按鈕操作', false);
       } else {
         badge.textContent = '未連線';
         badge.classList.remove('connected');
-        btn.textContent = '搜尋並連線 (AT-09 / BT05)';
-        btn.classList.remove('disconnect');
+        connectBtn.textContent = '搜尋並連線';
+        connectBtn.disabled = false;
+        disconnectBtn.disabled = true;
         setBanner('藍牙未連線', false);
       }
     }
 
-    async function toggleConnection() {
-      if (bluetoothDevice && bluetoothDevice.gatt.connected) {
-        bluetoothDevice.gatt.disconnect();
-        return;
-      }
-
+    async function connectBluetooth() {
       try {
         appendLog('正在搜尋藍牙裝置...');
         bluetoothDevice = await navigator.bluetooth.requestDevice({
@@ -210,6 +236,7 @@
         });
 
         bluetoothDevice.addEventListener('gattserverdisconnected', () => {
+          bleCharacteristic = null;
           appendLog('⚠️ 藍牙已中斷連線');
           updateUI(false);
         });
@@ -243,6 +270,17 @@
         appendLog('✅ 藍牙連線成功！');
       } catch (err) {
         appendLog('❌ 連線失敗: ' + err.message);
+      }
+    }
+
+    function disconnectBluetooth() {
+      if (bluetoothDevice && bluetoothDevice.gatt.connected) {
+        appendLog('正在手動斷開藍牙...');
+        bluetoothDevice.gatt.disconnect();
+      } else {
+        bleCharacteristic = null;
+        updateUI(false);
+        appendLog('目前無連線中的裝置');
       }
     }
 
