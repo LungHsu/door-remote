@@ -167,7 +167,7 @@
   <!-- 上、停、下 控制按鈕區 -->
   <div class="card">
     <div class="control-panel">
-      <button class="ctrl-btn btn-up" onclick="sendCmd('U')">▲ 上</button>
+      <button class="ctrl-btn btn-up" onclick="sendCmd('U')">▲ 上 (15秒自動停)</button>
       <button class="ctrl-btn btn-stop" onclick="sendCmd('S')">■ 停</button>
       <button class="ctrl-btn btn-down" onclick="sendCmd('D')">▼ 下</button>
     </div>
@@ -188,6 +188,8 @@
     let bleCharacteristic = null;
     let rxBuffer = '';
     let autoAttemptId = 0;
+    let autoStopTimer = null;
+    let countdownInterval = null;
 
     function appendLog(text) {
       const logEl = document.getElementById('log');
@@ -202,6 +204,17 @@
         banner.classList.add('active');
       } else {
         banner.classList.remove('active');
+      }
+    }
+
+    function clearAutoStopTimers() {
+      if (autoStopTimer) {
+        clearTimeout(autoStopTimer);
+        autoStopTimer = null;
+      }
+      if (countdownInterval) {
+        clearInterval(countdownInterval);
+        countdownInterval = null;
       }
     }
 
@@ -227,6 +240,7 @@
         disconnectBtn.disabled = true;
         setBanner('正在嘗試自動連接 BT05...', false);
       } else {
+        clearAutoStopTimers();
         badge.textContent = '未連線';
         connectBtn.textContent = '連線 BT05';
         connectBtn.disabled = false;
@@ -245,6 +259,7 @@
 
     function handleDisconnected() {
       bleCharacteristic = null;
+      clearAutoStopTimers();
       appendLog('⚠️ BT05 已中斷連線');
       updateUI('disconnected');
     }
@@ -283,7 +298,7 @@
             const msg = line.trim();
             if (msg) {
               appendLog('⬅️ 控制器回傳: ' + msg);
-              if (msg === 'OK:UP') setBanner('✅ 鐵捲門已執行：【▲ 上】', true);
+              if (msg === 'OK:UP' && !autoStopTimer) setBanner('✅ 鐵捲門已執行：【▲ 上】', true);
               if (msg === 'OK:STOP') setBanner('✅ 鐵捲門已執行：【■ 停】', true);
               if (msg === 'OK:DOWN') setBanner('✅ 鐵捲門已執行：【▼ 下】', true);
             }
@@ -372,6 +387,7 @@
 
     function disconnectBluetooth() {
       autoAttemptId++;
+      clearAutoStopTimers();
       try {
         if (bluetoothDevice && bluetoothDevice.gatt) {
           appendLog('正在手動斷開藍牙...');
@@ -384,6 +400,17 @@
       appendLog('已斷開藍牙連線');
     }
 
+    async function writeBleCommand(cmd, logLabel = null) {
+      if (!bleCharacteristic) return;
+      const data = new TextEncoder('utf-8').encode(cmd);
+      if (bleCharacteristic.properties.writeWithoutResponse) {
+        await bleCharacteristic.writeValueWithoutResponse(data);
+      } else {
+        await bleCharacteristic.writeValue(data);
+      }
+      appendLog('➡️ ' + (logLabel || ('傳送指令: ' + cmd)));
+    }
+
     async function sendCmd(cmd) {
       if (!bleCharacteristic) {
         alert('請先點擊「連線 BT05」完成連線！');
@@ -394,14 +421,35 @@
       buttons.forEach(b => b.disabled = true);
       setTimeout(() => buttons.forEach(b => b.disabled = false), 500);
 
-      const data = new TextEncoder('utf-8').encode(cmd);
+      // 無論按哪一顆鍵，先清除先前的 15 秒自動停止倒數
+      clearAutoStopTimers();
+
       try {
-        if (bleCharacteristic.properties.writeWithoutResponse) {
-          await bleCharacteristic.writeValueWithoutResponse(data);
-        } else {
-          await bleCharacteristic.writeValue(data);
+        await writeBleCommand(cmd);
+
+        // 若按下「▲ 上」(U)，啟動 15 秒倒數並自動發送「■ 停」(S)
+        if (cmd === 'U') {
+          let remaining = 15;
+          setBanner(`▲ 鐵捲門上升中（${remaining} 秒後自動停止）`, true);
+          appendLog('⏱️ 啟動 15 秒上升自動停止計時器');
+
+          countdownInterval = setInterval(() => {
+            remaining--;
+            if (remaining > 0) {
+              setBanner(`▲ 鐵捲門上升中（${remaining} 秒後自動停止）`, true);
+            }
+          }, 1000);
+
+          autoStopTimer = setTimeout(async () => {
+            clearAutoStopTimers();
+            try {
+              await writeBleCommand('S', '⏱️ 15 秒時間到，自動傳送停止指令: S');
+              setBanner('✅ 上升滿 15 秒，已自動停止', true);
+            } catch (err) {
+              appendLog('❌ 自動停止指令傳送失敗: ' + err.message);
+            }
+          }, 15000);
         }
-        appendLog('➡️ 傳送指令: ' + cmd);
       } catch (err) {
         appendLog('❌ 傳送失敗: ' + err.message);
       }
