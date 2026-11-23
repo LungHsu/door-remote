@@ -47,6 +47,7 @@
       color: var(--ios-gray);
     }
     .badge.connected { background: #D1F2D9; color: #1E8E3E; }
+    .badge.connecting { background: #FFF3CD; color: #856404; }
     
     .conn-btn-group {
       display: flex;
@@ -134,7 +135,7 @@
     .btn-down { background: var(--ios-blue); color: white; }
 
     #log {
-      height: 100px;
+      height: 110px;
       overflow-y: auto;
       background: #1C1C1E;
       color: #32D74B;
@@ -175,7 +176,7 @@
   <!-- 通訊紀錄區 -->
   <div class="card">
     <div style="font-weight: 600; font-size: 13px; margin-bottom: 6px; color: #666;">通訊紀錄</div>
-    <div id="log">正在檢查已記憶的 BT05 裝置...\n</div>
+    <div id="log">正在檢查已記憶的 BT05 裝置 (限時 3 秒)...\n</div>
   </div>
 
   <script>
@@ -202,38 +203,54 @@
       }
     }
 
-    function updateUI(connected, name = '') {
+    function updateUI(state, name = '') {
       const badge = document.getElementById('statusBadge');
       const connectBtn = document.getElementById('connectBtn');
       const disconnectBtn = document.getElementById('disconnectBtn');
 
-      if (connected) {
+      badge.classList.remove('connected', 'connecting');
+
+      if (state === 'connected') {
         badge.textContent = '已連線：' + name;
         badge.classList.add('connected');
         connectBtn.textContent = '已連線';
         connectBtn.disabled = true;
         disconnectBtn.disabled = false;
         setBanner('已連線，請點擊下方按鈕操作', false);
+      } else if (state === 'connecting') {
+        badge.textContent = '自動搜尋中...';
+        badge.classList.add('connecting');
+        connectBtn.textContent = '連線中 (3秒)...';
+        connectBtn.disabled = true;
+        disconnectBtn.disabled = true;
+        setBanner('正在嘗試自動連接 BT05...', false);
       } else {
         badge.textContent = '未連線';
-        badge.classList.remove('connected');
         connectBtn.textContent = '連線 BT05';
         connectBtn.disabled = false;
         disconnectBtn.disabled = true;
-        setBanner('藍牙未連線', false);
+        setBanner('請點擊上方「連線 BT05」手動搜尋', false);
       }
     }
 
-    // 核心 GATT 連線與監聽函式（自動與手動共用）
+    // 超時控制工具：超過指定毫秒即中斷等待並拋出超時錯誤
+    function withTimeout(promise, ms) {
+      let timer;
+      const timeoutPromise = new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('TIMEOUT')), ms);
+      });
+      return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timer));
+    }
+
+    // 核心 GATT 連線與監聽函式
     async function establishGattConnection(device) {
       bluetoothDevice = device;
       bluetoothDevice.addEventListener('gattserverdisconnected', () => {
         bleCharacteristic = null;
         appendLog('⚠️ BT05 已中斷連線');
-        updateUI(false);
+        updateUI('disconnected');
       });
 
-      appendLog('正在建立 GATT 連線至 ' + (bluetoothDevice.name || 'BT05') + '...');
       const server = await bluetoothDevice.gatt.connect();
       const service = await server.getPrimaryService(SERVICE_UUID);
       bleCharacteristic = await service.getCharacteristic(CHARACTERISTIC_UUID);
@@ -257,42 +274,56 @@
         }
       });
 
-      updateUI(true, bluetoothDevice.name || 'BT05');
+      updateUI('connected', bluetoothDevice.name || 'BT05');
       appendLog('✅ BT05 連線成功！');
     }
 
-    // 網頁開啟時自動嘗試連接曾經授權過的 BT05（免彈窗）
+    // 網頁開啟時自動檢查 3 秒：若沒裝置或超時，立刻轉為手動搜尋
     async function tryAutoConnect() {
       if (!navigator.bluetooth || !navigator.bluetooth.getDevices) {
-        appendLog('此瀏覽器不支援背景自動重連，請點擊「連線 BT05」。');
+        appendLog('此瀏覽器不支援背景記憶，請點擊「連線 BT05」手動搜尋。');
+        updateUI('disconnected');
         return;
       }
 
+      updateUI('connecting');
+
       try {
-        const devices = await navigator.bluetooth.getDevices();
-        const savedBT05 = devices.find(d => d.name && (d.name.startsWith('BT05') || d.name.startsWith('MLT-BT05')));
-        
-        if (savedBT05) {
-          appendLog('發現已記憶裝置：' + savedBT05.name + '，嘗試自動秒連...');
+        await withTimeout((async () => {
+          const devices = await navigator.bluetooth.getDevices();
+          const savedBT05 = devices.find(d => d.name && (d.name.startsWith('BT05') || d.name.startsWith('MLT-BT05')));
+          
+          if (!savedBT05) {
+            throw new Error('NO_SAVED_DEVICE');
+          }
+
+          appendLog('發現已記憶裝置：' + savedBT05.name + '，嘗試自動連線...');
           await establishGattConnection(savedBT05);
-        } else {
-          appendLog('首次使用或尚未記憶裝置，請點擊「連線 BT05」配對一次。');
-        }
+        })(), 3000); // 設定嚴格 3 秒（3000 毫秒）上限
+
       } catch (err) {
-        appendLog('自動連線待命（請點擊「連線 BT05」）：' + err.message);
+        // 3 秒內未連上或找不到已記憶裝置：中止背景嘗試並切回手動搜尋
+        if (bluetoothDevice && bluetoothDevice.gatt.connected) {
+          bluetoothDevice.gatt.disconnect();
+        }
+        bluetoothDevice = null;
+        bleCharacteristic = null;
+        updateUI('disconnected');
+
+        if (err.message === 'TIMEOUT') {
+          appendLog('⏱️ 超過 3 秒未偵測到裝置，已切換為手動搜尋模式。');
+        } else if (err.message === 'NO_SAVED_DEVICE') {
+          appendLog('ℹ️ 尚無已記憶裝置，請點擊「連線 BT05」手動搜尋。');
+        } else {
+          appendLog('⚠️ 自動連線未完成，請點擊「連線 BT05」手動搜尋。');
+        }
       }
     }
 
-    // 手動點擊連線（若記憶體已有裝置則直接重連，無需再跳清單）
+    // 手動點擊連線：直接開啟系統藍牙掃描視窗搜尋 BT05
     async function manualConnect() {
       try {
-        if (bluetoothDevice) {
-          appendLog('正在快速重連 ' + (bluetoothDevice.name || 'BT05') + '...');
-          await establishGattConnection(bluetoothDevice);
-          return;
-        }
-
-        appendLog('正在搜尋 BT05 裝置...');
+        appendLog('正在手動搜尋 BT05 裝置...');
         const device = await navigator.bluetooth.requestDevice({
           filters: [
             { namePrefix: 'BT05' },
@@ -301,44 +332,42 @@
           optionalServices: [SERVICE_UUID]
         });
 
+        appendLog('連線中：' + (device.name || 'BT05') + '...');
         await establishGattConnection(device);
-      } catch (err) {
-        appendLog('❌ 連線失敗: ' + err.message);
-      }
-    }
-
-    function disconnectBluetooth() {
-      if (bluetoothDevice && bluetoothDevice.gatt.connected) {
-        appendLog('正在手動斷開藍牙...');
-        bluetoothDevice.gatt.disconnect();
-      } else {
-        bleCharacteristic = null;
-        updateUI(false);
-        appendLog('目前無連線中的裝置');
-      }
-    }
-
-    async function sendCmd(cmd) {
-      if (!bleCharacteristic) {
-        alert('請先等待自動連線或點擊「連線 BT05」！');
-        return;
-      }
-
-      const buttons = document.querySelectorAll('.ctrl-btn');
-      buttons.forEach(b => b.disabled = true);
-      setTimeout(() => buttons.forEach(b => b.disabled = false), 500);
-
-      const data = new TextEncoder('utf-8').encode(cmd);
-      try {
-        if (bleCharacteristic.properties.writeWithoutResponse) {
-          await bleCharacteristic.writeValueWithoutResponse(data);
-        } else {
-          await bleCharacteristic.writeValue(data);
-        }
-        appendLog('➡️ 傳送指令: ' + cmd);
-      } catch (err) {
-        appendLog('❌ 傳送失敗: ' + err.message);
-      }
-    }
-
-    // 頁面載入完成後立即觸發自動連線
+        } catch (err) {
+updateUI('disconnected');
+appendLog('❌ 手動連線取消或失敗: ' + err.message);
+}
+}
+function disconnectBluetooth() {
+if (bluetoothDevice && bluetoothDevice.gatt.connected) {
+appendLog('正在手動斷開藍牙...');
+bluetoothDevice.gatt.disconnect();
+} else {
+bleCharacteristic = null;
+updateUI('disconnected');
+appendLog('目前無連線中的裝置');
+}
+}
+async function sendCmd(cmd) {
+if (!bleCharacteristic) {
+alert('請先點擊「連線 BT05」完成連線！');
+return;
+}
+const buttons = document.querySelectorAll('.ctrl-btn');
+buttons.forEach(b => b.disabled = true);
+setTimeout(() => buttons.forEach(b => b.disabled = false), 500);
+const data = new TextEncoder('utf-8').encode(cmd);
+try {
+if (bleCharacteristic.properties.writeWithoutResponse) {
+await bleCharacteristic.writeValueWithoutResponse(data);
+} else {
+await bleCharacteristic.writeValue(data);
+}
+appendLog('➡️ 傳送指令: ' + cmd);
+} catch (err) {
+appendLog('❌ 傳送失敗: ' + err.message);
+}
+}
+// 頁面載入後自動執行 3 秒快速檢測
+window.addEventListener('load', tryAutoConnect);
