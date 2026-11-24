@@ -400,15 +400,24 @@
       appendLog('已斷開藍牙連線');
     }
 
-    async function writeBleCommand(cmd, logLabel = null) {
-      if (!bleCharacteristic) return;
-      const data = new TextEncoder('utf-8').encode(cmd);
-      if (bleCharacteristic.properties.writeWithoutResponse) {
-        await bleCharacteristic.writeValueWithoutResponse(data);
-      } else {
-        await bleCharacteristic.writeValue(data);
-      }
-      appendLog('➡️ ' + (logLabel || ('傳送指令: ' + cmd)));
+    function startUpAutoStopTimer() {
+      clearAutoStopTimers();
+      let remaining = 15;
+      setBanner(`▲ 鐵捲門上升中（${remaining} 秒後自動停止）`, true);
+      appendLog('⏱️ 啟動 15 秒上升自動停止計時器');
+
+      countdownInterval = setInterval(() => {
+        remaining--;
+        if (remaining > 0) {
+          setBanner(`▲ 鐵捲門上升中（${remaining} 秒後自動停止）`, true);
+        }
+      }, 1000);
+
+      autoStopTimer = setTimeout(() => {
+        clearAutoStopTimers();
+        appendLog('⏱️ 15 秒時間到，自動觸發停止鍵 (S)');
+        sendCmd('S');
+      }, 15000);
     }
 
     async function sendCmd(cmd) {
@@ -421,34 +430,19 @@
       buttons.forEach(b => b.disabled = true);
       setTimeout(() => buttons.forEach(b => b.disabled = false), 500);
 
-      // 無論按哪一顆鍵，先清除先前的 15 秒自動停止倒數
       clearAutoStopTimers();
 
+      const data = new TextEncoder('utf-8').encode(cmd);
       try {
-        await writeBleCommand(cmd);
+        if (bleCharacteristic.properties.writeWithoutResponse) {
+          await bleCharacteristic.writeValueWithoutResponse(data);
+        } else {
+          await bleCharacteristic.writeValue(data);
+        }
+        appendLog('➡️ 傳送指令: ' + cmd);
 
-        // 若按下「▲ 上」(U)，啟動 15 秒倒數並自動發送「■ 停」(S)
         if (cmd === 'U') {
-          let remaining = 15;
-          setBanner(`▲ 鐵捲門上升中（${remaining} 秒後自動停止）`, true);
-          appendLog('⏱️ 啟動 15 秒上升自動停止計時器');
-
-          countdownInterval = setInterval(() => {
-            remaining--;
-            if (remaining > 0) {
-              setBanner(`▲ 鐵捲門上升中（${remaining} 秒後自動停止）`, true);
-            }
-          }, 1000);
-
-          autoStopTimer = setTimeout(async () => {
-            clearAutoStopTimers();
-            try {
-              await writeBleCommand('S', '⏱️ 15 秒時間到，自動傳送停止指令: S');
-              setBanner('✅ 上升滿 15 秒，已自動停止', true);
-            } catch (err) {
-              appendLog('❌ 自動停止指令傳送失敗: ' + err.message);
-            }
-          }, 15000);
+          startUpAutoStopTimer();
         }
       } catch (err) {
         appendLog('❌ 傳送失敗: ' + err.message);
