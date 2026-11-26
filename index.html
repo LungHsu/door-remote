@@ -167,7 +167,7 @@
   <!-- 上、停、下 控制按鈕區 -->
   <div class="card">
     <div class="control-panel">
-      <button class="ctrl-btn btn-up" onclick="sendCmd('U')">▲ 上 (15秒自動停)</button>
+      <button class="ctrl-btn btn-up" onclick="sendCmd('U')">▲ 上 (18秒自動停)</button>
       <button class="ctrl-btn btn-stop" onclick="sendCmd('S')">■ 停</button>
       <button class="ctrl-btn btn-down" onclick="sendCmd('D')">▼ 下</button>
     </div>
@@ -402,9 +402,9 @@
 
     function startUpAutoStopTimer() {
       clearAutoStopTimers();
-      let remaining = 15;
+      let remaining = 18;
       setBanner(`▲ 鐵捲門上升中（${remaining} 秒後自動停止）`, true);
-      appendLog('⏱️ 啟動 15 秒上升自動停止計時器');
+      appendLog('⏱️ 啟動 18 秒上升自動停止計時器');
 
       countdownInterval = setInterval(() => {
         remaining--;
@@ -415,9 +415,9 @@
 
       autoStopTimer = setTimeout(() => {
         clearAutoStopTimers();
-        appendLog('⏱️ 15 秒時間到，自動觸發停止鍵 (S)');
+        appendLog('⏱️ 18 秒時間到，自動觸發停止鍵 (S)');
         sendCmd('S');
-      }, 15000);
+      }, 18000);
     }
 
     async function sendCmd(cmd) {
